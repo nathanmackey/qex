@@ -49,6 +49,16 @@ proc Symanzik*(beta:float, c1:float = C1Symanzik):auto = gaugeActRect(beta, c1)
 proc Iwasaki*(beta:float, c1:float = C1Iwasaki):auto = gaugeActRect(beta, c1)
 proc DBW2*(beta:float, c1:float = C1DBW2):auto = gaugeActRect(beta, c1)
 
+proc computeA[M](umunu: M, one: M, n: static[int]): M =
+  let omega = 0.5*(umunu + one)
+  let omegadag = adj(omega)
+  let Msq = omegadag * omega
+  var Minv: M
+  inverse(Minv, Msq)
+  var Minvn = Minv
+  for i in 0..<n:
+    Minvn = Minvn * Minv
+  result = Minvn * omegadag
 # plaq: 6 types
 # rect: 12 types
 # pgm: 32=4*2*4=4*3*2+4*2 types
@@ -66,13 +76,15 @@ proc gaugeAction1*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
   let nd = lo.nDim
   #let np = (nd*(nd-1)) div 2
   let nc = u[0][0].ncols
-  var cs = startCornerShifts(uu)
+  var cs = startCornerShifts(uu) #gets the corner shifts in each direction for making staples
   toc("gaugeAction startCornerShifts")
-  var (stf,stu,ss) = makeStaples(uu, cs)
+  var (stf,stu,ss) = makeStaples(uu, cs) #makes Staples obviously, which are simply the staple shaped product of links, then all you need for plaquette is the link times the staple
   toc("gaugeAction makeStaples")
   #var ss = startStapleShifts(st)
   #toc("gaugeAction startStapleShifts")
-  let maxThreads = getMaxThreads()
+
+  #setting up for the parallel part
+  let maxThreads = getMaxThreads() 
   var nth = 0
   var act = newSeq[float](3*maxThreads)
   toc("gaugeAction setup")
@@ -81,7 +93,7 @@ proc gaugeAction1*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
     var plaq = 0.0
     var rect = 0.0
     var pgm = 0.0
-    for ir in u[0]:
+    for ir in u[0]: #local loop, calculating plaquette and local part of rectangle, doesn't need completed MPI communication
       for mu in 1..<nd:
         for nu in 0..<mu:
           # plaq
@@ -101,7 +113,7 @@ proc gaugeAction1*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
               let r = redot(bnu, stf[nu,mu][ir])
               rect += simdSum(r)
     toc("gaugeAction local")
-    for mu in 1..<nd:
+    for mu in 1..<nd: 
       for nu in 0..<mu:
         var needBoundary = false
         boundaryWaitSB(ss[mu][nu]): needBoundary = true
@@ -745,6 +757,167 @@ proc forceA*(c: GaugeActionCoeffs, g,f: auto) =
   toc("gaugeADeriv")
   contractProjectTAH(g, f)
   toc("forceA end")
+
+
+#Bulk-transition preventing action from PhysRevD.108.114511, implemented by Nathan Mackey
+#INCOMPLETE
+proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
+  mixin mul, redot, load1
+  tic("gaugeAction1")
+  let u = cast[ptr cArray[T]](unsafeAddr(uu[0])) #pointing the memory location of gauge field to cArray
+  let lo = u[0].l #layout information
+  let nd = lo.nDim 
+  #let np = (nd*(nd-1)) div 2
+  let nc = u[0][0].ncols
+  var cs = startCornerShifts(uu) #corner shifts, procedure in /gauge/staples.nim
+  toc("gaugeAction startCornerShifts")
+  var (stf,stu,ss) = makeStaples(uu, cs)
+  toc("gaugeAction makeStaples")
+  #var ss = startStapleShifts(st)
+  #toc("gaugeAction startStapleShifts")
+  let maxThreads = getMaxThreads()
+  var nth = 0
+  var act = newSeq[float](3*maxThreads)
+  var n = 2
+  var one: type(u[0][0])
+  toc("gaugeAction setup")
+  one := 1
+  threads:
+    tic()
+    var bp = 0.0
+    var rect = 0.0
+    var pgm = 0.0
+    for ir in u[0]:
+      for mu in 1..<nd:
+        for nu in 0..<mu:
+          # plaq
+          let umunu = u[mu][ir] * stf[mu,nu][ir] #U_mu multiplied by the forward staple in the mu-nu plane
+          let omega = 0.5 * (umunu + one)
+          let omegadag = omega.adj
+          let M = omegadag * omega
+          var Minv: type(M)
+          inverse(Minv, M)
+          var Minvn = Minv
+          for i in 1..<n:
+            Minvn = Minvn * Minv
+          var b1 = Minvn - one
+          bp += simdSum(b1) 
+    toc("gaugeAction local")
+    for mu in 1..<nd:
+      for nu in 0..<mu:
+        var needBoundary = false
+        boundaryWaitSB(ss[mu][nu]): needBoundary = true
+        boundaryWaitSB(ss[nu][mu]): needBoundary = true
+    act[threadNum*3]   = bp
+    act[threadNum*3+1] = rect
+    act[threadNum*3+2] = pgm
+    if threadNum==0: nth = numThreads
+    # toc("gaugeAction boundary")
+  toc("gaugeAction threads")
+  var a = [0.0, 0.0, 0.0]
+  for i in 0..<nth:
+    a[0] += act[i*3]
+    a[1] += act[i*3+1]
+    a[2] += act[i*3+2]
+  rankSum(a)
+  result = (-1.0/nc.float) * (c.plaq*a[0] + c.rect*a[1] + c.pgm*a[2])
+  toc("gaugeAction end")
+
+
+proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq, accumulate=false) =
+  ## if accumulate, the derivatives will add to f.
+  ## if not, f is set to 0 first.
+  mixin load1, adj
+  tic("gaugeActionDeriv")
+  let u = cast[ptr cArray[T]](unsafeAddr(uu[0]))
+  let lo = u[0].l
+  let nd = lo.nDim
+  #let np = (nd*(nd-1)) div 2
+  let nc = u[0][0].ncols
+  let cp = c.plaq / float(nc)
+  let cr = c.rect / float(nc)
+  var cs = startCornerShifts(uu)
+  var ru:FieldArray[type(u[0]).V,type(u[0]).T]  # the rect parts of 3
+  var sb:seq[seq[ShiftB[type(u[0][0])]]]  # backward ru
+  var sf:seq[seq[ShiftB[type(u[0][0])]]]  # forward stf
+  toc("gaugeActionDeriv init")
+  var (stf,stu,ss) = makeStaples(uu, cs)
+  toc("gaugeActionDeriv makeStaples")
+  threads:
+    tic()
+    for mu in 0..<nd:
+      if not accumulate:
+        f[mu] := 0
+    for ir in u[0]:
+      for mu in 1..<nd:
+        for nu in 0..<mu:
+          # plaq
+          let umunuf = u[mu][ir] * stf[mu,nu][ir] #U_mu multiplied by the forward staple in the mu-nu plane, so the plaq
+          var one:type(umunuf)
+          one := 1
+          amunuf = computeA(umunuf,one,2)
+          #Adds the forward plaq part of the force, which can be done locally:
+          f[mu][ir] += cp * stf[mu,nu][ir] * amunuf
+          f[nu][ir] += cp * stf[nu,mu][ir] * amunuf.adj
+
+          #Checks if the backwards plaq can be done locally and adds it to the force matrix eleemnt if so
+          if isLocal(ss[mu][nu],ir):
+            var bmu: type(load1(u[0][0]))
+            localSB(ss[mu][nu], ir, assign(bmu,it), stu[mu,nu][ix])
+            let umunub = u[mu][ir] * bmu
+            let amunub = computeA(umunub,one,2)
+            f[mu][ir] += cp * bmu * amunub
+          if isLocal(ss[nu][mu],ir):
+            var bnu: type(load1(u[0][0]))
+            localSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
+            let unumub = u[nu][ir] * bnu
+            computeA(unumub,one,n)
+            f[nu][ir] += cp * bnu * anumub
+
+    toc("gaugeActionDeriv local")
+
+    #Relooping to get all the backwards plaqs which could not be computed without communication
+    for mu in 1..<nd:
+      for nu in 0..<mu:
+        var needBoundary = false
+        boundaryWaitSB(ss[mu][nu]): needBoundary = true
+        boundaryWaitSB(ss[nu][mu]): needBoundary = true
+        if needBoundary:
+          boundarySyncSB()
+          for ir in lo:
+            if not isLocal(ss[mu][nu],ir):
+              var bmu: type(load1(u[0][0]))
+              getSB(ss[mu][nu], ir, assign(bmu,it), stu[mu,nu][ix])
+              let umunub = u[mu][ir] * bmu
+              let amunub = computeA(umunub,one,2)             
+              f[mu][ir] += cp * bmu * amunub
+            if not isLocal(ss[nu][mu],ir):
+              var bnu: type(load1(u[0][0]))
+              getSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
+              let unumub = u[nu][ir] * bnu
+              let anumub = computeA(unumub,one,2)   
+              f[nu][ir] += cp * bnu * anumub
+  toc("gaugeActionDeriv end")
+
+#The f matrix is full of the sum of the staples now
+
+proc gaugeForceBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq) =
+  tic("gaugeForce")
+  gaugeActionDerivBP(c, uu, f)
+  toc("gaugeActionDeriv")
+  contractProjectTAH(uu, f)
+  toc("gaugeForce end")
+
+proc gaugeForceBP*[T](uu: openArray[T]): auto =
+  let lo = uu[0].l
+  var f = newOneOf @uu
+  let gc = GaugeActionCoeffs(plaq:1.0)
+  gc.gaugeForce(uu,f)
+  return f
+
+proc gaugeForceBP*(f,g: array|seq) =
+  var c = GaugeActionCoeffs(plaq:1.0)
+  gaugeForce(c,g,f)
 
 when isMainModule:
   import qex
