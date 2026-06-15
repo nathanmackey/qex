@@ -66,11 +66,13 @@ proc newGaugeField*(l: Layout; gaugeInformation: JsonNode): auto =
 proc gaugeAction*(self: LatticeField; u: auto): float =
   result = case self.gaugeAction
     of Adjoint: self.gaugeActionCoefficients.actionA(u)
+    of BP: self.gaugeActionCoefficients.gaugeActionBP(u)
     else: self.gaugeActionCoefficients.gaugeAction1(u)
 
 proc gaugeForce*[S](self: LatticeField; u,f: seq[S]) =
   case self.gaugeAction:
     of Adjoint: self.gaugeActionCoefficients.forceA(u,f)
+    of BP: self.gaugeActionCoefficients.gaugeForce(u,f)
     else: self.gaugeActionCoefficients.gaugeForce(u,f)
 
 proc gaugeAction*(self: LatticeField): float =
