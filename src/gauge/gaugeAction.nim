@@ -763,7 +763,7 @@ proc forceA*(c: GaugeActionCoeffs, g,f: auto) =
 #INCOMPLETE
 proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
   mixin mul, redot, load1
-  tic("gaugeAction1")
+  tic("gaugeActionBP")
   let u = cast[ptr cArray[T]](unsafeAddr(uu[0])) #pointing the memory location of gauge field to cArray
   let lo = u[0].l #layout information
   let nd = lo.nDim 
@@ -820,7 +820,7 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
     a[1] += act[i*3+1]
     a[2] += act[i*3+2]
   rankSum(a)
-  result = (-1.0/nc.float) * (c.plaq*a[0] + c.rect*a[1] + c.pgm*a[2])
+  result = (-1.0/nc.float) * (0.5 * c.plaq*a[0] + c.rect*a[1] + c.pgm*a[2])
   toc("gaugeAction end")
 
 
@@ -834,7 +834,7 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
   let nd = lo.nDim
   #let np = (nd*(nd-1)) div 2
   let nc = u[0][0].ncols
-  let cp = c.plaq / float(nc)
+  let cp = (c.plaq / float(nc)) * 0.5 
   let cr = c.rect / float(nc)
   var cs = startCornerShifts(uu)
   var ru:FieldArray[type(u[0]).V,type(u[0]).T]  # the rect parts of 3
