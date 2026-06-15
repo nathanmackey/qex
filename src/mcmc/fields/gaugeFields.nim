@@ -37,6 +37,7 @@ proc newGaugeField(
   self.gaugeAction = action
   self.gaugeActionCoefficients = case self.gaugeAction
     of Wilson: GaugeActionCoeffs(plaq: beta)
+    of BP: GaugeActionCoeffs(plaq: beta)
     of Adjoint: GaugeActionCoeffs(plaq: beta, adjplaq: beta*adjRat)
     of Rectangle: gaugeActRect(beta, rectCoeff)
     else: # Annoying Nim 2.0 compiler workaround
@@ -78,11 +79,13 @@ proc gaugeForce*[S](self: LatticeField; u,f: seq[S]) =
 proc gaugeAction*(self: LatticeField): float =
   result = case self.gaugeAction
     of Adjoint: self.gaugeActionCoefficients.actionA(self.u)
+    of BP: self.gaugeActionCoefficients.gaugeActionBP(self.u)
     else: self.gaugeActionCoefficients.gaugeAction1(self.u)
 
 proc gaugeForce*[S](self: LatticeField; f: seq[S]) =
   case self.gaugeAction:
     of Adjoint: self.gaugeActionCoefficients.forceA(self.u, f)
+    of BP: self.gaugeActionCoefficients.gaugeForceBP(self.u, f)
     else: self.gaugeActionCoefficients.gaugeForce(self.u, f)
 
 if isMainModule:
