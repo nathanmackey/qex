@@ -54,7 +54,7 @@ proc computeA[M](umunu: M, one: M, n: static[int]): M =
   let omegadag = adj(omega)
   let Msq = omegadag * omega
   var Minv: M
-  inverse(Minv, Msq)
+  inverse(Minv[], Msq[])
   var Minvn = Minv
   for i in 0..<n:
     Minvn = Minvn * Minv
@@ -780,6 +780,7 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
   var act = newSeq[float](3*maxThreads)
   var n = 2
   var one: type(u[0][0])
+  var unumu: type(u[0][0])
   toc("gaugeAction setup")
   one := 1
   threads:
@@ -791,17 +792,17 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
       for mu in 1..<nd:
         for nu in 0..<mu:
           # plaq
-          let umunu = u[mu][ir] * stf[mu,nu][ir] #U_mu multiplied by the forward staple in the mu-nu plane
+          mul(umunu,u[mu][ir],stf[mu,nu][ir].adj) #U_mu multiplied by the forward staple plane, gives plaquette U_numu
           let omega = 0.5 * (umunu + one)
           let omegadag = omega.adj
           let M = omegadag * omega
           var Minv: type(M)
-          inverse(Minv, M)
+          inverse(Minv[], M[])
           var Minvn = Minv
           for i in 1..<n:
             Minvn = Minvn * Minv
-          var b1 = Minvn - one
-          bp += simdSum(b1) 
+          var b1 = (Minvn - one)
+          bp += simdSum(b1.trace.re) 
     toc("gaugeAction local")
     for mu in 1..<nd:
       for nu in 0..<mu:
@@ -827,7 +828,7 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
 proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq, accumulate=false) =
   ## if accumulate, the derivatives will add to f.
   ## if not, f is set to 0 first.
-  mixin load1, adj
+  mixin load1, adj, mul
   tic("gaugeActionDeriv")
   let u = cast[ptr cArray[T]](unsafeAddr(uu[0]))
   let lo = u[0].l
@@ -839,9 +840,10 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
   var cs = startCornerShifts(uu)
   var ru:FieldArray[type(u[0]).V,type(u[0]).T]  # the rect parts of 3
   var sb:seq[seq[ShiftB[type(u[0][0])]]]  # backward ru
-  var sf:seq[seq[ShiftB[type(u[0][0])]]]  # forward stf
+  var sf:seq[seq[ShiftB[type(u[0][0])]]]  # forward st
   toc("gaugeActionDeriv init")
   var (stf,stu,ss) = makeStaples(uu, cs)
+  var umunuf,unumuf,umunub,unumub {.noInit.}: evalType(u[0][0])
   toc("gaugeActionDeriv makeStaples")
   threads:
     tic()
@@ -852,27 +854,27 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
       for mu in 1..<nd:
         for nu in 0..<mu:
           # plaq
-          let umunuf = u[mu][ir] * stf[mu,nu][ir] #U_mu multiplied by the forward staple in the mu-nu plane, so the plaq
+          mul(umunuf, u[mu][ir], stf[mu,nu][ir].adj) #U_mu multiplied by the forward staple in the mu-nu plane, so the plaq
           var one:type(umunuf)
           one := 1
           amunuf = computeA(umunuf,one,2)
           #Adds the forward plaq part of the force, which can be done locally:
-          f[mu][ir] += cp * stf[mu,nu][ir] * amunuf
-          f[nu][ir] += cp * stf[nu,mu][ir] * amunuf.adj
+          f[mu][ir] += cp * amunuf.adj * stf[mu,nu][ir] 
+          f[nu][ir] += cp * amunuf * stf[nu,mu][ir]
 
           #Checks if the backwards plaq can be done locally and adds it to the force matrix eleemnt if so
           if isLocal(ss[mu][nu],ir):
             var bmu: type(load1(u[0][0]))
             localSB(ss[mu][nu], ir, assign(bmu,it), stu[mu,nu][ix])
-            let umunub = u[mu][ir] * bmu
+            mul(umunub, u[mu][ir], bmu.adj)
             let amunub = computeA(umunub,one,2)
-            f[mu][ir] += cp * bmu * amunub
+            f[mu][ir] += cp * amunub.adj * bmu
           if isLocal(ss[nu][mu],ir):
             var bnu: type(load1(u[0][0]))
             localSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
-            let unumub = u[nu][ir] * bnu
+            mul(unumub, u[nu][ir], bnu.adj)
             computeA(unumub,one,n)
-            f[nu][ir] += cp * bnu * anumub
+            f[nu][ir] += cp * anumub.adj * bnu 
 
     toc("gaugeActionDeriv local")
 
@@ -888,19 +890,18 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
             if not isLocal(ss[mu][nu],ir):
               var bmu: type(load1(u[0][0]))
               getSB(ss[mu][nu], ir, assign(bmu,it), stu[mu,nu][ix])
-              let umunub = u[mu][ir] * bmu
+              mul(umunub,u[mu][ir],bmu.adj)
               let amunub = computeA(umunub,one,2)             
-              f[mu][ir] += cp * bmu * amunub
+              f[mu][ir] += cp * amunub.adj * bmu 
             if not isLocal(ss[nu][mu],ir):
               var bnu: type(load1(u[0][0]))
               getSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
-              let unumub = u[nu][ir] * bnu
+              mul(unumub,u[nu][ir],bnu.adj)
               let anumub = computeA(unumub,one,2)   
-              f[nu][ir] += cp * bnu * anumub
+              f[nu][ir] += cp * amunu.adj * bnu
   toc("gaugeActionDeriv end")
 
-#The f matrix is full of the sum of the staples now
-
+#The f matrix is full of the sum of the weighted staples now, multiplying u_[mu][ir] * f[mu][ir].adj gives the force just needs to be projected to TAH
 proc gaugeForceBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq) =
   tic("gaugeForce")
   gaugeActionDerivBP(c, uu, f)
