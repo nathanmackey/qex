@@ -857,7 +857,7 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
           mul(umunuf, u[mu][ir], stf[mu,nu][ir].adj) #U_mu multiplied by the forward staple in the mu-nu plane, so the plaq
           var one:type(umunuf)
           one := 1
-          amunuf = computeA(umunuf,one,2)
+          let amunuf = computeA(umunuf,one,2)
           #Adds the forward plaq part of the force, which can be done locally:
           f[mu][ir] += cp * amunuf.adj * stf[mu,nu][ir] 
           f[nu][ir] += cp * amunuf * stf[nu,mu][ir]
@@ -873,7 +873,7 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
             var bnu: type(load1(u[0][0]))
             localSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
             mul(unumub, u[nu][ir], bnu.adj)
-            computeA(unumub,one,n)
+            let anumub= computeA(unumub,one,n)
             f[nu][ir] += cp * anumub.adj * bnu 
 
     toc("gaugeActionDeriv local")
