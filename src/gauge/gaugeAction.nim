@@ -778,13 +778,15 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
   let maxThreads = getMaxThreads()
   var nth = 0
   var act = newSeq[float](3*maxThreads)
-  var n = 2
-  var one: type(u[0][0])
-  var unumu: type(u[0][0])
+
   toc("gaugeAction setup")
-  one := 1
+  
   threads:
     tic()
+    var n = 2
+    var one: type(u[0][0])
+    var unumu: type(u[0][0])
+    one := 1
     var bp = 0.0
     var rect = 0.0
     var pgm = 0.0
@@ -898,7 +900,7 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
               getSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
               mul(unumub,u[nu][ir],bnu.adj)
               let anumub = computeA(unumub,one,2)   
-              f[nu][ir] += cp * amunu.adj * bnu
+              f[nu][ir] += cp * anumu.adj * bnu
   toc("gaugeActionDeriv end")
 
 #The f matrix is full of the sum of the weighted staples now, multiplying u_[mu][ir] * f[mu][ir].adj gives the force just needs to be projected to TAH
@@ -913,12 +915,12 @@ proc gaugeForceBP*[T](uu: openArray[T]): auto =
   let lo = uu[0].l
   var f = newOneOf @uu
   let gc = GaugeActionCoeffs(plaq:1.0)
-  gc.gaugeForce(uu,f)
+  gc.gaugeForceBP(uu,f)
   return f
 
 proc gaugeForceBP*(f,g: array|seq) =
   var c = GaugeActionCoeffs(plaq:1.0)
-  gaugeForce(c,g,f)
+  gaugeForceBP(c,g,f)
 
 when isMainModule:
   import qex
