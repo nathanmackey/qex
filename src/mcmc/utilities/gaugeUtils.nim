@@ -134,11 +134,14 @@ proc flowMeasurements(u: auto; loop: int; tau: float): JsonNode =
   var
     pls,plt: ComplexProxy[ComplexObj[float64,float64]]
     poly: seq[ComplexProxy[ComplexObj[float64,float64]]]
-    t2Ess,t2Est,t2Ees,t2Eet: float
+    t2Ess,t2Est,t2Ees,t2Eet,t2Esym: float
   let
     f = u.fmunu(loop)
     (es, et) = f.densityE
     q = f.topoQ
+    # symOp sums (nc - Re Tr) per loop, while the plaquette/clover E below carry
+    # an extra 6/nc, so rescale to put all three on the same footing.
+    esym = (6.0/3.0)*u.symOp
     pl = u.plaq
     nl = pl.len div 2
     ss = 6.0*pl[0..<nl].sum
@@ -150,6 +153,7 @@ proc flowMeasurements(u: auto; loop: int; tau: float): JsonNode =
   plt = poly[^1]
   (t2Ess,t2Est) = (6.0*tau*tau*(3.0-ss),6.0*tau*tau*(3.0-st))
   (t2Ees,t2Eet) = (tau*tau*es,tau*tau*et)
+  t2Esym = tau*tau*esym
   result = %* {
     "flow-time": tau,
     "plaquette":0.5*ss+0.5*st,
@@ -165,6 +169,8 @@ proc flowMeasurements(u: auto; loop: int; tau: float): JsonNode =
     "Im(spacelike-Polyakov-loop)":3.0*pls.im,
     "Re(timelike-Polyakov-loop)":3.0*plt.re,
     "Im(timelike-Polyakov-loop)":3.0*plt.im,
+    "symanzik":esym,
+    "t2E-symanzik":t2Esym,
   }
 
 proc get(info:JsonNode;key:string): seq[float] = 
@@ -177,7 +183,7 @@ template gradientFlow*(u: auto; info: JsonNode; body: untyped) =
     f {.inject,used.}: File
     tau {.inject.}: float
     measurements {.inject.}: JsonNode
-  for flow,flowInfo in info:
+  for flow,flowInfo in info:s
     let
       loops = case info[flow].hasKey("loops")
         of true: info[flow]["loops"].getInt()

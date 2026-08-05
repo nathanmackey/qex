@@ -28,7 +28,7 @@ proc checkJSON(info: JsonNode): JsonNode =
 proc newGaugeField(
     self: var LatticeField;
     action: GaugeActionType;
-    beta, adjRat, rectCoeff: float
+    beta, n, adjRat, rectCoeff: float
   ) =
   # Create new stream
   var stream = newMCStream("new gauge field")
@@ -37,7 +37,7 @@ proc newGaugeField(
   self.gaugeAction = action
   self.gaugeActionCoefficients = case self.gaugeAction
     of Wilson: GaugeActionCoeffs(plaq: beta)
-    of BP: GaugeActionCoeffs(plaq: beta)
+    of BP: GaugeActionCoeffs(plaq: beta, nBP: n)
     of Adjoint: GaugeActionCoeffs(plaq: beta, adjplaq: beta*adjRat)
     of Rectangle: gaugeActRect(beta, rectCoeff)
     else: # Annoying Nim 2.0 compiler workaround
@@ -62,6 +62,7 @@ proc newGaugeField*(l: Layout; gaugeInformation: JsonNode): auto =
     info["beta"].getFloat(),
     info["adjoint-ratio"].getFloat(),
     info["rectangle-coefficient"].getFloat(),
+    info["bulk-prev-n"].getInt()
   )
 
 proc gaugeAction*(self: LatticeField; u: auto): float =

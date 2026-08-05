@@ -7,6 +7,7 @@ import io
 import times
 #import profile
 import os
+import staples
 import strUtils, sequtils
 import maths, rng, physics/qcdTypes
 
@@ -379,6 +380,87 @@ proc plaq3*[T](g: seq[T]): auto =
     toc("plaq3 trace")
   toc("plaq3 threads")
   result = tr/(lo.physVol.float*0.5*float(nd*(nd-1)*nc))
+
+proc symOp*[T](uu: openArray[T]): auto =
+  #Symanzik operator with c_p = 5/3, c_r = -1/12
+  mixin mul, redot, load1
+  tic("symOp")
+  let u = cast[ptr cArray[T]](unsafeAddr(uu[0]))
+  let lo = u[0].l
+  let nd = lo.nDim
+  let nc = u[0][0].ncols
+  let cr = -1*(1/12)
+  let cp = (5/3)
+  var cs = startCornerShifts(uu) #gets the corner shifts in each direction for making staples
+  toc("symOp startCornerShifts")
+  var (stf,stu,ss) = makeStaples(uu, cs) #makes Staples obviously, which are simply the staple shaped product of links, then all you need for plaquette is the link times the staple
+  toc("symOp makeStaples")
+  #var ss = startStapleShifts(st)
+  #toc("gaugeAction startStapleShifts")
+
+  #setting up for the parallel part
+  let maxThreads = getMaxThreads() 
+  var nth = 0
+  var act = newSeq[float](2*maxThreads)
+  toc("symOp setup")
+  threads:
+    tic()
+    var plaq = 0.0
+    var rect = 0.0
+    for ir in u[0]: #local loop, calculating plaquette and local part of rectangle, doesn't need completed MPI communication
+      for mu in 1..<nd:
+        for nu in 0..<mu:
+          # plaq
+          let p1 = redot(u[mu][ir], stf[mu,nu][ir])
+          plaq += simdSum(p1)
+          
+          if isLocal(ss[mu][nu],ir):
+            var bmu: type(load1(u[0][0]))
+            localSB(ss[mu][nu], ir, assign(bmu,it), stu[mu,nu][ix])
+            # rect
+            let r = redot(bmu, stf[mu,nu][ir])
+            rect += simdSum(r)
+          if isLocal(ss[nu][mu],ir):
+            var bnu: type(load1(u[0][0]))
+            localSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
+            # rect
+            let r = redot(bnu, stf[nu,mu][ir])
+            rect += simdSum(r)
+    toc("symOp local")
+    for mu in 1..<nd: 
+      for nu in 0..<mu:
+        var needBoundary = false
+        boundaryWaitSB(ss[mu][nu]): needBoundary = true
+        boundaryWaitSB(ss[nu][mu]): needBoundary = true
+        if needBoundary:
+          boundarySyncSB()
+          for ir in lo:
+            if not isLocal(ss[mu][nu],ir):
+              var bmu: type(load1(u[0][0]))
+              getSB(ss[mu][nu], ir, assign(bmu,it), stu[mu,nu][ix])
+              # rect
+              let r = redot(bmu, stf[mu,nu][ir])
+              rect += simdSum(r)
+            if not isLocal(ss[nu][mu],ir):
+              var bnu: type(load1(u[0][0]))
+              getSB(ss[nu][mu], ir, assign(bnu,it), stu[nu,mu][ix])
+              # rect
+              let r = redot(bnu, stf[nu,mu][ir])
+              rect += simdSum(r)
+    act[threadNum*2]   = plaq
+    act[threadNum*2+1] = rect
+    if threadNum==0: nth = numThreads
+    # toc("symOp boundary")
+  toc("symOp threads")
+  var a = [0.0, 0.0]
+  for i in 0..<nth:
+    a[0] += act[i*2]
+    a[1] += act[i*2+1]
+  rankSum(a)
+  #echo "plaq: ", a[0]
+  #echo "rect: ", a[1]
+  result = 9.0*nc.float - (cp*a[0] + cr*a[1])/(lo.physVol.float)
+
 
 proc echoPlaq*(g: auto) =
   var pl = plaq(g)
