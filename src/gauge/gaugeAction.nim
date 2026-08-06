@@ -16,8 +16,13 @@ type
     nBP*: int #not really of the same class as the other fields but need to go to the same places
 
 proc `*`*(x: float, y: GaugeActionCoeffs): GaugeActionCoeffs =
-  for r, v in fields(result, y):
-    r = x * v
+  # nBP is an exponent, not a coefficient, so it is carried through unscaled.
+  # This can't use fields() any more: that would try x*nBP (float*int).
+  result.plaq = x * y.plaq
+  result.rect = x * y.rect
+  result.pgm = x * y.pgm
+  result.adjplaq = x * y.adjplaq
+  result.nBP = y.nBP
 
 const
   C1Symanzik = -1.0/12.0  # tree-level
@@ -50,7 +55,7 @@ proc Symanzik*(beta:float, c1:float = C1Symanzik):auto = gaugeActRect(beta, c1)
 proc Iwasaki*(beta:float, c1:float = C1Iwasaki):auto = gaugeActRect(beta, c1)
 proc DBW2*(beta:float, c1:float = C1DBW2):auto = gaugeActRect(beta, c1)
 
-proc computeA[M](umunu: M, one: M, n: static[int]): M =
+proc computeA[M](umunu: M, one: M, n: int): M =
   var omega: M
   add(omega,umunu,one)
   omega *= 0.5
@@ -778,9 +783,10 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
   tic("gaugeActionBP")
   let u = cast[ptr cArray[T]](unsafeAddr(uu[0])) #pointing the memory location of gauge field to cArray
   let lo = u[0].l #layout information
-  let nd = lo.nDim 
+  let nd = lo.nDim
   #let np = (nd*(nd-1)) div 2
   let nc = u[0][0].ncols
+  let nBP = c.nBP  # hoisted out of the threads block: also used in the result below
   var cs = startCornerShifts(uu) #corner shifts, procedure in /gauge/staples.nim
   toc("gaugeAction startCornerShifts")
   var (stf,stu,ss) = makeStaples(uu, cs)
@@ -794,9 +800,7 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
   
   threads:
     tic()
-    let nBP = c.nBP
     var one: type(u[0][0])
-    var unumu: type(u[0][0])
     var umunu: type(u[0][0])
     var M: type(u[0][0])
     var omega: type(u[0][0])
@@ -840,7 +844,7 @@ proc gaugeActionBP*[T](c: GaugeActionCoeffs, uu: openarray[T]): auto =
     a[1] += act[i*3+1]
     a[2] += act[i*3+2]
   rankSum(a)
-  result = (1.0/nc.float) * (2.0/nBP) * (c.plaq*a[0])
+  result = (1.0/nc.float) * (2.0/nBP.float) * (c.plaq*a[0])
   toc("gaugeAction end")
 
 
@@ -855,8 +859,10 @@ proc gaugeActionDerivBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq
   let nBP = c.nBP
   #let np = (nd*(nd-1)) div 2
   let nc = u[0][0].ncols
-  # S = (c/nc) sum Tr[M^-2], A = M^-3 omega^dag, so dS/dt = -2 (c/nc) Re Tr(p U S^dag A),
-  # which in the f = X, force = projectTAH(U X^dag) convention gives X = 2 (c/nc) A^dag S.
+  # S = (c/nc)(2/n) sum Tr[M^-n - 1], with A = M^-(n+1) omega^dag, so
+  #   dS = (c/nc)(2/n)(-n) Re Tr(A dU) = -2 (c/nc) Re Tr(p U S^dag A).
+  # The n cancels, so in the f = X, force = projectTAH(U X^dag) convention
+  # X = 2 (c/nc) A^dag S for EVERY n -- do not multiply an n back in here.
   let cp = (c.plaq / float(nc)) * 2
   let cr = c.rect / float(nc)
   var cs = startCornerShifts(uu)
@@ -935,12 +941,14 @@ proc gaugeForceBP*[T](c: GaugeActionCoeffs, uu: openArray[T], f: array|seq) =
 proc gaugeForceBP*[T](uu: openArray[T]): auto =
   let lo = uu[0].l
   var f = newOneOf @uu
-  let gc = GaugeActionCoeffs(plaq:1.0)
+  # nBP must be set explicitly: it defaults to 0, which would give 2.0/0 in the
+  # action and silently run zero loop iterations. 2 is the original hard-coded n.
+  let gc = GaugeActionCoeffs(plaq:1.0, nBP:2)
   gc.gaugeForceBP(uu,f)
   return f
 
 proc gaugeForceBP*(f,g: array|seq) =
-  var c = GaugeActionCoeffs(plaq:1.0)
+  var c = GaugeActionCoeffs(plaq:1.0, nBP:2)
   gaugeForceBP(c,g,f)
 
 when isMainModule:
