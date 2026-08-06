@@ -10,6 +10,7 @@ const
   C1Symanzik = -1.0/12.0
   C1Iwasaki = -0.331
   C1DBW2 = -1.4088
+  DefaultNBP = 2  # BP exponent n; 2 is the value it was hard-coded to
 
 converter toGaugeActionType(s: string):
   GaugeActionType = parseEnum[GaugeActionType](s)
@@ -21,6 +22,8 @@ proc checkJSON(info: JsonNode): JsonNode =
     result["adjoint-ratio"] = %* BetaAOverBetaF
   if not result.hasKey("rectangle-coefficient"):
     result["rectangle-coefficient"] = %* C1Symanzik
+  if not result.hasKey("bulk-prev-n"):
+    result["bulk-prev-n"] = %* DefaultNBP
   if not result.hasKey("action"): result["action"] = %* "Wilson"
   if not result.hasKey("beta"): qexError "beta not specified for gauge field"
   result["field-type"] = %* "gauge"
@@ -28,7 +31,8 @@ proc checkJSON(info: JsonNode): JsonNode =
 proc newGaugeField(
     self: var LatticeField;
     action: GaugeActionType;
-    beta, n, adjRat, rectCoeff: float
+    beta, adjRat, rectCoeff: float;
+    n: int  # BP exponent: an int, and last, to match the call site below
   ) =
   # Create new stream
   var stream = newMCStream("new gauge field")
@@ -74,7 +78,7 @@ proc gaugeAction*(self: LatticeField; u: auto): float =
 proc gaugeForce*[S](self: LatticeField; u,f: seq[S]) =
   case self.gaugeAction:
     of Adjoint: self.gaugeActionCoefficients.forceA(u,f)
-    of BP: self.gaugeActionCoefficients.gaugeForce(u,f)
+    of BP: self.gaugeActionCoefficients.gaugeForceBP(u,f)
     else: self.gaugeActionCoefficients.gaugeForce(u,f)
 
 proc gaugeAction*(self: LatticeField): float =
